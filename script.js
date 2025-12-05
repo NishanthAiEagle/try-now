@@ -62,6 +62,9 @@ let bodyPixNet = null;
 let lastBodyPixRun = 0;
 let lastSnapshotDataURL = '';
 
+/* we now remember the last face meta used for drawing (for perfect snapshots) */
+let lastFaceMeta = null;
+
 /* Tunables (initial values match UI defaults) */
 let EAR_SIZE_FACTOR = parseFloat(earSizeRange.value || 0.24);
 let NECK_Y_OFFSET_FACTOR = parseFloat(neckYRange.value || 0.95);
@@ -186,6 +189,7 @@ async function onFaceMeshResults(results) {
 
   if (!results.multiFaceLandmarks || !results.multiFaceLandmarks.length) {
     smoothedLandmarks = null;
+    lastFaceMeta = null;
     drawWatermark(canvasCtx);
     return;
   }
@@ -223,6 +227,9 @@ async function onFaceMeshResults(results) {
   else faceShape = 'oval';
   smoothedState.faceShape = faceShape;
 
+  // remember this frame's face meta for snapshots
+  lastFaceMeta = { faceWidth, faceHeight, faceShape };
+
   const rawEarDist = Math.hypot(rightEar.x - leftEar.x, rightEar.y - leftEar.y);
   if (smoothedState.earDist == null) smoothedState.earDist = rawEarDist;
   else smoothedState.earDist = smoothedState.earDist * EAR_DIST_SMOOTH + rawEarDist * (1 - EAR_DIST_SMOOTH);
@@ -252,7 +259,8 @@ async function onFaceMeshResults(results) {
     smoothedState.angle = s[Math.floor(s.length/2)];
   }
 
-  drawJewelrySmart(smoothedState, canvasCtx, smoothedLandmarks, { faceWidth, faceHeight, faceShape });
+  // use the same meta for live draw
+  drawJewelrySmart(smoothedState, canvasCtx, smoothedLandmarks, lastFaceMeta);
 
   await ensureBodyPixLoaded();
   runBodyPixIfNeeded();
@@ -267,6 +275,8 @@ async function onFaceMeshResults(results) {
 
 /* Core: draw jewelry with shape-aware offsets */
 function drawJewelrySmart(state, ctx, landmarks, meta) {
+  if (!meta) return; // safety
+
   const leftEar = state.leftEar, rightEar = state.rightEar, neckPoint = state.neckPoint;
   const earDist = state.earDist || Math.hypot(rightEar.x - leftEar.x, rightEar.y - leftEar.y);
   const angle = state.angle || 0;
@@ -411,11 +421,14 @@ async function takeSnapshot() {
   const ctx = snap.getContext('2d'); 
   ctx.drawImage(videoElement, 0, 0, snap.width, snap.height);
 
-  drawJewelrySmart(smoothedState, ctx, smoothedLandmarks, { 
-    faceWidth: (0.5*canvasElement.width), 
-    faceHeight:(0.7*canvasElement.height), 
-    faceShape: smoothedState.faceShape 
-  });
+  // use EXACT same meta as live frame (fallback if null)
+  const meta = lastFaceMeta || {
+    faceWidth: 0.5 * canvasElement.width,
+    faceHeight: 0.7 * canvasElement.height,
+    faceShape: smoothedState.faceShape || 'oval'
+  };
+
+  drawJewelrySmart(smoothedState, ctx, smoothedLandmarks, meta);
   if (lastPersonSegmentation && lastPersonSegmentation.data) 
     compositeHeadOcclusion(ctx, smoothedLandmarks, lastPersonSegmentation);
   else 
@@ -496,11 +509,14 @@ async function startAutoTry(){
       snap.height = canvasElement.height;
       const ctx = snap.getContext('2d'); 
       try { ctx.drawImage(videoElement, 0, 0, snap.width, snap.height); } catch(e) {}
-      drawJewelrySmart(smoothedState, ctx, smoothedLandmarks, { 
-        faceWidth: (0.5*canvasElement.width), 
-        faceHeight:(0.7*canvasElement.height), 
-        faceShape: smoothedState.faceShape 
-      });
+
+      const meta = lastFaceMeta || {
+        faceWidth: 0.5 * canvasElement.width,
+        faceHeight: 0.7 * canvasElement.height,
+        faceShape: smoothedState.faceShape || 'oval'
+      };
+
+      drawJewelrySmart(smoothedState, ctx, smoothedLandmarks, meta);
       if (lastPersonSegmentation && lastPersonSegmentation.data) 
         compositeHeadOcclusion(ctx, smoothedLandmarks, lastPersonSegmentation);
       else 
